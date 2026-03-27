@@ -432,66 +432,51 @@ If you have any questions, please contact your agent for a detailed explanation.
 
 
     // =========================================================================
-    // 【J. 申請頁面：完整抓取流程】
+    // 【J. 申請頁面：只在 v87_active 時自動執行，否則靜默等待】
     // =========================================================================
-    // ★ 核心：申請頁完成後直接 window.location 跳去 agent 頁（同 tab）
     if (isAppPage) {
-        setTimeout(async () => {
-            if (!GM_getValue('v87_active', false)) return;
+        // 只有「自動化任務進行中」先自動執行，平時打開申請頁唔做任何嘢
+        if (!GM_getValue('v87_active', false)) {
+            // 靜默：唔做任何嘢，等用戶手動揿浮球按鈕
+        } else {
+            setTimeout(async () => {
+                // 登錄檢測
+                const isLoginPage = (
+                    document.querySelector('input[type="password"]') !== null ||
+                    /login|signin|sign_in|auth|session/i.test(window.location.href) ||
+                    /ログイン|サインイン|パスワード/i.test(document.title)
+                );
+                if (isLoginPage) { showLoginPanel(); return; }
 
-            // 登錄檢測
-            const isLoginPage = (
-                document.querySelector('input[type="password"]') !== null ||
-                /login|signin|sign_in|auth|session/i.test(window.location.href) ||
-                /ログイン|サインイン|パスワード/i.test(document.title)
-            );
-            if (isLoginPage) {
-                showLoginPanel();
-                return;
-            }
+                showOverlay('⏳ 正在抓取訊息...', '#f39c12');
+                await new Promise(r => setTimeout(r, 2000));
 
-            showOverlay('⏳ 正在抓取訊息... (等待頁面加載)', '#f39c12');
+                const { items, isToday: todayFlag } = getTargetMessages();
+                const q = GM_getValue('v87_queue', []);
+                const idx = GM_getValue('v87_idx', 0);
+                const agentUrl = q[idx]?.agent;
 
-            // 等多 2 秒讓頁面動態內容加載
-            await new Promise(r => setTimeout(r, 2000));
+                if (!agentUrl) {
+                    showOverlay('⚠️ 找不到 Agent URL，跳至下一案...', '#e74c3c');
+                    setTimeout(() => { hideOverlay(); GM_setValue('v87_nextNow', true); window.close(); }, 2500);
+                    return;
+                }
 
-            const { items, isToday: todayFlag } = getTargetMessages();
-            const q = GM_getValue('v87_queue', []);
-            const idx = GM_getValue('v87_idx', 0);
-            const agentUrl = q[idx]?.agent;
+                if (!items.length) {
+                    GM_setValue('v87_report', null);
+                    GM_setValue('v87_noNewMsg', false);
+                    showOverlay('ℹ️ 無任何訊息，直接跳至案件頁...', '#7f8c8d');
+                    setTimeout(() => { hideOverlay(); window.location.href = agentUrl; }, 2000);
+                    return;
+                }
 
-            if (!agentUrl) {
-                showOverlay('⚠️ 找不到 Agent URL，跳至下一案...', '#e74c3c');
-                setTimeout(() => {
-                    hideOverlay();
-                    GM_setValue('v87_nextNow', true);
-                    window.close();
-                }, 2500);
-                return;
-            }
+                showOverlay(todayFlag ? '🔄 找到今日訊息，翻譯中...' : '🔄 今日無新訊息，翻譯最近記錄...', todayFlag ? '#27ae60' : '#e67e22');
+                await buildAndStoreReport(items, todayFlag);
+                showOverlay('✅ 完成！跳至案件頁...', '#27ae60');
+                setTimeout(() => { hideOverlay(); window.location.href = agentUrl; }, 1200);
 
-            // 完全無訊息
-            if (!items.length) {
-                showOverlay('ℹ️ 無任何訊息，跳至下一案...', '#7f8c8d');
-                GM_setValue('v87_report', null);
-                GM_setValue('v87_noNewMsg', false);
-                setTimeout(() => { hideOverlay(); window.location.href = agentUrl; }, 2000);
-                return;
-            }
-
-            // 有訊息：翻譯並存報告
-            if (todayFlag) {
-                showOverlay('🔄 找到今日訊息，翻譯中...', '#27ae60');
-            } else {
-                showOverlay('🔄 今日無新訊息，翻譯最近記錄...', '#e67e22');
-            }
-
-            await buildAndStoreReport(items, todayFlag);
-
-            showOverlay('✅ 完成！跳至案件頁...', '#27ae60');
-            setTimeout(() => { hideOverlay(); window.location.href = agentUrl; }, 1200);
-
-        }, 4000); // 等 4 秒讓申請頁完全加載
+            }, 4000);
+        }
     }
 
 
@@ -594,6 +579,7 @@ If you have any questions, please contact your agent for a detailed explanation.
                 setTimeout(() => {
                     fillInputBox(target, report);
                     GM_setValue('v87_report', null);
+                    GM_setValue('v87_last_report', report); // 備份供「重新貼入」用
                     hideOverlay();
                     if (mode === 'auto') {
                         setTimeout(() => { findSendBtn()?.click(); }, 1500);
@@ -678,12 +664,25 @@ If you have any questions, please contact your agent for a detailed explanation.
     // ★ 核心確認面板：報告已貼入，等用戶確認，按「發送並下一案」時自動發送再跳
     function showAgentConfirmPanel(inputBox, findSendBtn) {
         document.getElementById('v87-confirm-panel')?.remove();
+
+        // 取得目前輸入框內容供複製
+        function getCurrentContent() {
+            if (inputBox) {
+                return inputBox.value || inputBox.innerText || '';
+            }
+            return GM_getValue('v87_last_report', '') || '';
+        }
+
         const nav = _makePanel('v87-confirm-panel', '#27ae60');
         nav.innerHTML = ''
             + '<p style="font-size:18px;margin:0 0 6px;">✅ 報告已自動填入</p>'
-            + '<p style="font-size:13px;color:#aaa;margin:0 0 18px;">請確認內容無誤，<b style="color:#f1c40f;">按「發送並下一案」</b>即自動發送並跳至下一案</p>'
-            + '<div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;">'
+            + '<p style="font-size:13px;color:#aaa;margin:0 0 14px;">請確認內容無誤，<b style="color:#f1c40f;">按「發送並下一案」</b>即自動發送並跳至下一案</p>'
+            + '<div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-bottom:10px;">'
             + _btn('v87-confirm-send', '#27ae60', '📤 發送並下一案')
+            + _btn('v87-confirm-copy', '#2980b9', '📋 複製報告')
+            + _btn('v87-confirm-refill', '#8e44ad', '📌 重新貼入')
+            + '</div>'
+            + '<div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap;">'
             + _btn('v87-confirm-skip', '#7f8c8d', '⏭️ 不發送，下一案')
             + _btn('v87-confirm-auto', '#e67e22', '🚀 之後全自動')
             + _btn('v87-confirm-stop', '#ff4757', '🛑 終止')
@@ -692,12 +691,10 @@ If you have any questions, please contact your agent for a detailed explanation.
 
         function doSend() {
             showOverlay('📤 發送中...', '#27ae60');
-            // 試 Enter 鍵
             if (inputBox) {
                 inputBox.focus();
                 inputBox.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
             }
-            // 試發送按鈕（需要從 isAgentPage scope 拿，用全域搵）
             setTimeout(() => {
                 const sendBtn = document.querySelector([
                     'button[aria-label*="送信"]', 'button[aria-label*="send"]',
@@ -711,9 +708,41 @@ If you have any questions, please contact your agent for a detailed explanation.
         }
 
         document.getElementById('v87-confirm-send').onclick = () => { nav.remove(); doSend(); };
+
+        // 複製報告內容
+        document.getElementById('v87-confirm-copy').onclick = () => {
+            const content = getCurrentContent();
+            if (content) {
+                GM_setClipboard(content);
+                const btn = document.getElementById('v87-confirm-copy');
+                if (btn) { btn.innerText = '✅ 已複製！'; setTimeout(() => { btn.innerText = '📋 複製報告'; }, 2000); }
+            } else {
+                alert('⚠️ 找不到內容，請確認輸入框已有文字');
+            }
+        };
+
+        // 重新貼入（如輸入框內容被清空）
+        document.getElementById('v87-confirm-refill').onclick = () => {
+            const lastReport = GM_getValue('v87_last_report', '');
+            if (lastReport && inputBox) {
+                if (inputBox.tagName === 'TEXTAREA' || inputBox.tagName === 'INPUT') {
+                    inputBox.value = lastReport;
+                    inputBox.dispatchEvent(new Event('input', { bubbles: true }));
+                } else {
+                    inputBox.focus();
+                    document.execCommand('selectAll', false, null);
+                    document.execCommand('insertText', false, lastReport);
+                }
+                const btn = document.getElementById('v87-confirm-refill');
+                if (btn) { btn.innerText = '✅ 已重新貼入'; setTimeout(() => { btn.innerText = '📌 重新貼入'; }, 2000); }
+            } else {
+                alert('⚠️ 找不到上次報告內容');
+            }
+        };
+
         document.getElementById('v87-confirm-skip').onclick = () => { nav.remove(); goNextCaseFromAgent(); };
         document.getElementById('v87-confirm-auto').onclick = () => {
-            if (confirm('確定之後全部自動化？\n（自動貼入 + 自動發送，無需確認）')) {
+            if (confirm('確定之後全部自動化？\n（自動貼入 + 自動發送 + 自動跳下一案，完全無需操作）')) {
                 GM_setValue('v87_mode', 'auto');
                 nav.remove();
                 doSend();
