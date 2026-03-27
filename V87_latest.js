@@ -2,6 +2,8 @@
 // @name         中介大師 V87.5 - 確認發送版
 // @namespace    http://tampermonkey.net/
 // @version      87.5
+// @updateURL    https://raw.githubusercontent.com/fung-crypto/v87-script/main/V87_latest.js
+// @downloadURL  https://raw.githubusercontent.com/fung-crypto/v87-script/main/V87_latest.js
 // @description  流程：申請頁抓取(含無新訊息自動用最近記錄)→自動跳agent→貼入→等確認→按下一案自動發送
 // @match        *://*/*
 // @grant        window.close
